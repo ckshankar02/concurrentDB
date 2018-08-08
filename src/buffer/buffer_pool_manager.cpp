@@ -73,7 +73,7 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id) {
     free_list_->pop_front();
     //Update page_id for the page object
     tmp_page->page_id_ = page_id;
-    disk_manager_.ReadPage(tmp_page->page_id_,
+    disk_manager_->ReadPage(tmp_page->page_id_,
                         tmp_page->data_);
   }
 	else
@@ -145,7 +145,7 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) {
   //Page Found 
   if(found && tmp_page->page_id_ != INVALID_PAGE_ID && 
      tmp_page->is_dirty_) {
-    disk_manager_.WritePage(page_id, tmp_page->data_);
+    disk_manager_->WritePage(page_id, tmp_page->data_);
     tmp_page->is_dirty_ = false;
     latch_.unlock();
     return true;
@@ -198,7 +198,7 @@ bool BufferPoolManager::DeletePage(page_id_t page_id) {
     }
 
     //Deallocate the page from disk
-    disk_manager_.DeallocatePage(page_id);
+    disk_manager_->DeallocatePage(page_id);
     latch_.unlock();
     return true; 
   }
@@ -245,13 +245,13 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id) {
   new_page = free_list_->front();
   free_list_->pop_front();
   
-  page_id = disk_manager_.AllocatePage();
+  page_id = disk_manager_->AllocatePage();
   
   //Set page metadata
   new_page->page_id_ = page_id;
   new_page->pin_count_++;
 
-  disk_manager_.ReadPage(new_page->page_id_,
+  disk_manager_->ReadPage(new_page->page_id_,
                         new_page->data_);
 
   //Insert page into the page table
@@ -273,7 +273,7 @@ bool BufferPoolManager::AddToFreeList(Page *tmp_page) {
     if(tmp_page->pin_count_) return false;
 
     if(tmp_page->is_dirty_) 
-      disk_manager_.WritePage(tmp_page->page_id_, 
+      disk_manager_->WritePage(tmp_page->page_id_, 
                                       tmp_page->data_);
 
     //Adding the page back to free list
