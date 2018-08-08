@@ -1,4 +1,4 @@
-/**
+/*
  * b_plus_tree_leaf_page.h
  *
  * Store indexed key and record id(record id = page id combined with slot id,
@@ -22,7 +22,9 @@
 #include <utility>
 #include <vector>
 
+#include "page/b_plus_tree_internal_page.h"
 #include "page/b_plus_tree_page.h"
+
 
 namespace cmudb {
 #define B_PLUS_TREE_LEAF_PAGE_TYPE                                             \
@@ -35,11 +37,14 @@ public:
   // After creating a new leaf page from buffer pool, must call initialize
   // method to set default values
   void Init(page_id_t page_id, page_id_t parent_id = INVALID_PAGE_ID);
+
   // helper methods
   page_id_t GetNextPageId() const;
   void SetNextPageId(page_id_t next_page_id);
+  
   KeyType KeyAt(int index) const;
   int KeyIndex(const KeyType &key, const KeyComparator &comparator) const;
+  
   const MappingType &GetItem(int index);
 
   // insert and delete methods
@@ -47,8 +52,10 @@ public:
              const KeyComparator &comparator);
   bool Lookup(const KeyType &key, ValueType &value,
               const KeyComparator &comparator) const;
+  
   int RemoveAndDeleteRecord(const KeyType &key,
                             const KeyComparator &comparator);
+  
   // Split and Merge utility methods
   void MoveHalfTo(BPlusTreeLeafPage *recipient,
                   BufferPoolManager *buffer_pool_manager /* Unused */);
@@ -58,6 +65,13 @@ public:
                         BufferPoolManager *buffer_pool_manager);
   void MoveLastToFrontOf(BPlusTreeLeafPage *recipient, int parentIndex,
                          BufferPoolManager *buffer_pool_manager);
+ 
+  //Custom
+  void MoveFirstNTo(BPlusTreeLeafPage *recipient, int move_size,
+               BufferPoolManager *buffer_pool_manager);
+  void MoveLastNTo(BPlusTreeLeafPage *recipient, int move_size,
+               BufferPoolManager *buffer_pool_manager);
+  
   // Debug
   std::string ToString(bool verbose = false) const;
 
@@ -67,6 +81,11 @@ private:
   void CopyLastFrom(const MappingType &item);
   void CopyFirstFrom(const MappingType &item, int parentIndex,
                      BufferPoolManager *buffer_pool_manager);
+  
+  //Custom
+  void CopyFirstNFrom(MappingType *items, int size);
+  void CopyLastNFrom(MappingType *items, int size);
+
   page_id_t next_page_id_;
   MappingType array[0];
 };
