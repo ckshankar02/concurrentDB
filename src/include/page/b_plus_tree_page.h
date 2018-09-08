@@ -65,6 +65,7 @@ public:
   //Custome Helper methods
   //Returns the size of the header for leaf/internal pages
   int GetHeaderSize() const;
+	std::mutex GetMutex();
 
 private:
   // member variable, attributes that both internal and leaf page share
@@ -73,6 +74,8 @@ private:
   int max_size_;
   page_id_t parent_page_id_;
   page_id_t page_id_;
+
+	std::mutex page_mtx;
 };
 
 } // namespace cmudb

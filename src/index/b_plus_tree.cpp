@@ -48,6 +48,7 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 {
     bool res = false;
     BPlusTreePage *page_ptr;
+		std::shared_lock<std::mutex> *shr_lck;
 
 		if(this->IsEmpty()) return false;
 
@@ -56,7 +57,11 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
     page_id_t pg_id;
     ValueType value;	
 
-    while(!page_ptr->IsLeafPage())
+		std::stack<std::shared_lock<std::mutex> *> lock_stack;
+		shr_lock = new std::shared_lock<std::mutex>(page_ptr->page_mtx);
+		lock_stack.push(shr_lock);
+	
+	  while(!page_ptr->IsLeafPage())
     {
         // value is page id here
         pg_id = ((B_PLUS_TREE_INTERNAL_PG_PGID *)page_ptr)->Lookup
@@ -65,6 +70,12 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 
         page_ptr = 
               (BPlusTreePage *)this->buffer_pool_manager_->FetchPage(pg_id);
+				
+				shr_lock = new std::shared_lock<std::mutex>(page_ptr->page_mtx);
+
+				lock_stack.top()->unlock();
+				lock_stack.pop();
+				lock_stack.push(shr_lock);
     }
 
     if(((B_PLUS_TREE_LEAF_PAGE_TYPE *)page_ptr)->Lookup
