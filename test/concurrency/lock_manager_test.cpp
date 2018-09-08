@@ -19,8 +19,8 @@ TEST(LockManagerTest, BasicTest) {
   TransactionManager txn_mgr{&lock_mgr};
   RID rid{0, 0};
 
-  std::thread t0([&] { 
-		Transaction txn(0);
+  std::thread t0([&] {
+    Transaction txn(0);
     bool res = lock_mgr.LockShared(&txn, rid);
     EXPECT_EQ(res, true);
     EXPECT_EQ(txn.GetState(), TransactionState::GROWING);
