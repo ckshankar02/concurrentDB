@@ -24,13 +24,10 @@
 namespace cmudb {
 
 struct ridLockType{
-  std::mutex *ridMtx;
-  std::condition_variable *ridCV;
-	std::mutex q_mtx;
+  std::mutex ridMtx;
+  std::condition_variable ridCV;
 	std::set<txn_id_t> rd_txn_q;
 	txn_id_t wr_txn_id;
-  //uint32_t readers;
-  //bool writer;
 };
 
 class LockManager {
@@ -54,7 +51,8 @@ public:
   /*** END OF APIs ***/
 
   /***CUSTOM APIs*****/
-  ridLockType* get_ridLock(const RID &rid, uint8_t mode);
+  ridLockType* GetRIDLock(const RID &rid, uint8_t mode);
+	void ReleaseAll(Transaction *txn);
 
 private:
   bool strict_2PL_;

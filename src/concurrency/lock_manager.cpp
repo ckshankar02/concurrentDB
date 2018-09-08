@@ -6,7 +6,7 @@
 
 namespace cmudb {
 
-ridLockType* LockManager::get_ridLock(const RID &rid, uint8_t mode){
+ridLockType* LockManager::GetRIDLock(const RID &rid, uint8_t mode){
 		ridLockType *ridLock;
 
 		auto ridIter = ridMap.find(rid);
@@ -17,14 +17,15 @@ ridLockType* LockManager::get_ridLock(const RID &rid, uint8_t mode){
 			ridLock = new ridLockType;
 			if(!ridLock) 
 				return nullptr;
-			ridLock->ridMtx = new std::mutex;
-			ridLock->ridCV 	= new std::condition_variable;
-			ridLock->readers = 0;
-			ridLock->writer  = false;
-			ridLock->wr_txn_id = INVALID_TXN_ID; 
+			ridLock->wr_txn_id = INVALID_TXN_ID;
 		}
 		return ridLock;
 }
+
+void LockManager::ReleaseAll(Transaction *txn) {
+	
+}
+
 
 bool LockManager::LockShared(Transaction *txn, const RID &rid) {
 	ridLockType *ridLock;
@@ -36,33 +37,31 @@ bool LockManager::LockShared(Transaction *txn, const RID &rid) {
 	if(txn->GetState() != TransactionState::GROWING)
 	{
 		/* Rollback the transaction and return false */
-		txn->SetState(TransactionState::ABORTED);
+		//txn->SetState(TransactionState::ABORTED);
 		return false;
 	}
 
 	
 	mapMtx.lock();
-	ridLock = get_ridLock(rid, LOCK_MODE);
+	ridLock = GetRIDLock(rid, LOCK_MODE);
 	mapMtx.unlock();
 
 	if(!ridLock) return false;
 
-	ridLock->q_mtx.lock();
-	if(wr_txn_id != INVALID_TXN_ID 
-					&& wr_txn_id < txn->GetTransactionId()) {
-		txn->SetState(TransactionState::ABORTED);
-		ridLock->q_mtx.unlock();
+	std::unique_lock<std::mutex> rdLock(ridLock->ridMtx);
+
+	/* Implementing WAIT_DIE deadlock prevention method */
+	if(ridLock->wr_txn_id != INVALID_TXN_ID &&
+		 ridLock->wr_txn_id < txn->GetTransactionId())
+	{
+		rdLock.unlock();
 		return false;
 	}
-	ridLock->q_mtx.unlock();
 
-	std::unique_lock<std::mutex> rdLock(*ridLock->ridMtx);
-	//ridLock->ridCV->wait(rdLock, [&]{return (!ridLock->writer);});
-	ridLock->ridCV->wait(rdLock, 
-			[&]{return (ridLock->wr_txn_id == INVALID_TXN_ID);});
-	//ridLock->readers++;
-	ridLock->rd_txn_q.insert(txn->GetTransactionId());
+	ridLock->ridCV.wait(rdLock, 
+				[&]{return (ridLock->wr_txn_id == INVALID_TXN_ID);});
 	
+	ridLock->rd_txn_q.insert(txn->GetTransactionId());
 	txn->GetSharedLockSet()->insert(rid);
 	
   return true;
@@ -79,24 +78,31 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
 	if(txn->GetState() != TransactionState::GROWING)
 	{
 		/* Rollback the transaction and return false */
-		txn->SetState(TransactionState::ABORTED);		
+		//txn->SetState(TransactionState::ABORTED);		
 		return false;
 	}
 	
 	mapMtx.lock();
-	ridLock = get_ridLock(rid, LOCK_MODE);
+	ridLock = GetRIDLock(rid, LOCK_MODE);
 	mapMtx.unlock();
 
 	if(!ridLock) return false;	
 
-	std::unique_lock<std::mutex> wrLock(*ridLock->ridMtx);
-	//ridLock->ridCV->wait(wrLock,
-			//[&]{return (!ridLock->writer && ridLock->readers == 0);});
-	ridLock->ridCV->wait(wrLock,
-			[&]{return (ridLock->wr_txn_id == INVALID_TXN_ID && 
-									ridLock->rd_txn_q.size() == 0);});
+	std::unique_lock<std::mutex> wrLock(ridLock->ridMtx);
 
-	//ridLock->writer = true;
+	/* Implementing WAIT_DIE deadlock prevention method */
+	if((ridLock->wr_txn_id != INVALID_TXN_ID &&
+		  ridLock->wr_txn_id < txn->GetTransactionId()) ||
+		 (ridLock->rd_txn_q.size() > 0 &&
+		  *(ridLock->rd_txn_q.begin()) < txn->GetTransactionId())){
+		 wrLock.unlock();
+		 return false;
+	}
+
+	ridLock->ridCV.wait(wrLock, 
+			    [&]{return (ridLock->wr_txn_id == INVALID_TXN_ID && 
+											ridLock->rd_txn_q.size() == 0);});
+
 	ridLock->wr_txn_id = txn->GetTransactionId();
 
 	txn->GetExclusiveLockSet()->insert(rid);
@@ -105,7 +111,60 @@ bool LockManager::LockExclusive(Transaction *txn, const RID &rid) {
 }
 
 bool LockManager::LockUpgrade(Transaction *txn, const RID &rid) {
-  return false;
+	ridLockType *ridLock;
+	std::unordered_set<RID>::iterator iter;
+
+	/*  Check transaction state before proceeding.
+	 *  Proceed only if the transaction is in 
+	 *  GROWING State, else ABORT.
+	 */
+	if(txn->GetState() != TransactionState::GROWING)
+	{
+		/* Rollback the transaction and return false */
+		//txn->SetState(TransactionState::ABORTED);		
+		return false;
+	}
+
+	mapMtx.lock();
+	ridLock = GetRIDLock(rid, LOCK_MODE);
+	mapMtx.unlock();
+
+	if(!ridLock) return false;	
+
+	std::unique_lock<std::mutex> upgradeLock(ridLock->ridMtx);
+
+	/*  Verify if it is an upgrade from shared to
+	 *  exclusive, otherwise ABORT
+	 */
+	iter = txn->GetSharedLockSet()->find(rid);
+	if(iter == txn->GetSharedLockSet()->end())
+	{
+		txn->SetState(TransactionState::ABORTED);
+		upgradeLock.unlock();
+		return false;
+	}
+
+	ridLock->rd_txn_q.erase(txn->GetTransactionId());
+	txn->GetSharedLockSet()->erase(rid);
+	
+	/* Implementing WAIT_DIE deadlock prevention method */
+	if((ridLock->wr_txn_id != INVALID_TXN_ID &&
+		  ridLock->wr_txn_id < txn->GetTransactionId()) ||
+		 (ridLock->rd_txn_q.size() > 0 &&
+		  *(ridLock->rd_txn_q.begin()) < txn->GetTransactionId())){
+		 upgradeLock.unlock();
+		 return false;
+	}
+
+	ridLock->ridCV.wait(upgradeLock, 
+			    [&]{return (ridLock->wr_txn_id == INVALID_TXN_ID && 
+											ridLock->rd_txn_q.size() == 0);});
+
+	ridLock->wr_txn_id = txn->GetTransactionId();
+
+	txn->GetExclusiveLockSet()->insert(rid);
+
+  return true;
 }
 
 bool LockManager::Unlock(Transaction *txn, const RID &rid) {
@@ -113,35 +172,36 @@ bool LockManager::Unlock(Transaction *txn, const RID &rid) {
 	std::unordered_set<RID>::iterator iter;
 
 	if(txn->GetState() == TransactionState::GROWING) {
-			txn->SetState(TransactionState::SHRINKING);
+		txn->SetState(TransactionState::SHRINKING);
 	} 
 
-	if(txn->GetState() != TransactionState::SHRINKING) {
-		 txn->SetState(TransactionState::ABORTED);
-		 return false;
+	/* Implementing Strict Two Phase Locking */
+	if(strict_2PL_ && 
+		 txn->GetState() == TransactionState::SHRINKING)
+	{
+		return true;
 	}
 	
 	mapMtx.lock();
-	ridLock = get_ridLock(rid, UNLOCK_MODE);
+	ridLock = GetRIDLock(rid, UNLOCK_MODE);
 	mapMtx.unlock();
 
 	if(!ridLock) return false;	
+
 	
-	std::unique_lock<std::mutex> rwLock(*ridLock->ridMtx);
+	std::unique_lock<std::mutex> releaseLock(ridLock->ridMtx);
 
 	iter = txn->GetExclusiveLockSet()->find(rid);
 	if(iter != txn->GetExclusiveLockSet()->end()){
-		//ridLock->writer = false;
 		ridLock->wr_txn_id = INVALID_TXN_ID;
 		txn->GetExclusiveLockSet()->erase(rid);
 	} else {
-		//ridLock->readers--;
-	  ridLock->rd_txn_q.erase(txn->GetTransactionId());	
+		ridLock->rd_txn_q.erase(txn->GetTransactionId());
 		txn->GetSharedLockSet()->erase(rid);
 	}
 
-	rwLock.unlock();
-	ridLock->ridCV->notify_all();
+	releaseLock.unlock();
+	ridLock->ridCV.notify_all();
   return true;
 }
 
