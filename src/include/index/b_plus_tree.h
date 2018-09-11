@@ -12,11 +12,16 @@
 
 #include <queue>
 #include <vector>
+#include <mutex>
+#include <stack>
 
 #include "concurrency/transaction.h"
 #include "index/index_iterator.h"
 #include "page/b_plus_tree_internal_page.h"
 #include "page/b_plus_tree_leaf_page.h"
+
+#define INSERT 0
+#define DELETE 1
 
 namespace cmudb {
 
@@ -61,6 +66,10 @@ public:
   // expose for test purpose
   B_PLUS_TREE_LEAF_PAGE_TYPE *FindLeafPage(const KeyType &key,
                                            bool leftMost = false);
+
+  B_PLUS_TREE_LEAF_PAGE_TYPE *FindLeafPageForModify(const KeyType &key,
+                            											uint8_t operation, 
+															std::stack<BPlusTreePage *> &lockStack);
 
   B_PLUS_TREE_INTERNAL_PG_PGID* GetNewRoot();
 

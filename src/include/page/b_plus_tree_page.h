@@ -20,6 +20,7 @@
 #include <climits>
 #include <cstdlib>
 #include <string>
+#include <shared_mutex>
 
 #include "buffer/buffer_pool_manager.h"
 #include "index/generic_key.h"
@@ -65,7 +66,8 @@ public:
   //Custome Helper methods
   //Returns the size of the header for leaf/internal pages
   int GetHeaderSize() const;
-
+	std::shared_timed_mutex bp_mtx;
+	
 private:
   // member variable, attributes that both internal and leaf page share
   IndexPageType page_type_;
