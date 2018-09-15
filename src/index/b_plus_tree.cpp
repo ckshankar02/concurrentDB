@@ -5,8 +5,6 @@
 #include <queue>
 #include <sstream>
 #include <string>
-#include <stack>
-#include <shared_mutex>
 
 #include "common/exception.h"
 #include "common/logger.h"
@@ -50,7 +48,6 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
 {
     bool res = false;
     BPlusTreePage *page_ptr;
-		std::stack<BPlusTreePage *> lockStack;
 
 		if(this->IsEmpty()) return false;
 
@@ -59,29 +56,15 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
     page_id_t pg_id;
     ValueType value;	
 
-
-		page_ptr->bp_mtx.lock_shared();
-		lockStack.push(page_ptr);
-	
     while(!page_ptr->IsLeafPage())
     {
-				page_id_t parent_pgid; 
-		
         // value is page id here
         pg_id = ((B_PLUS_TREE_INTERNAL_PG_PGID *)page_ptr)->Lookup
                                                  (key, this->comparator_);
-				parent_pgid = page_ptr->GetPageId();		
+        this->buffer_pool_manager_->UnpinPage(page_ptr->GetPageId(), false);
 
         page_ptr = 
               (BPlusTreePage *)this->buffer_pool_manager_->FetchPage(pg_id);
-		
-			
-				page_ptr->bp_mtx.lock_shared();
-				lockStack.top()->bp_mtx.unlock_shared();
-        this->buffer_pool_manager_->UnpinPage(parent_pgid, false);
-
-				lockStack.pop();
-				lockStack.push(page_ptr);
     }
 
     if(((B_PLUS_TREE_LEAF_PAGE_TYPE *)page_ptr)->Lookup
@@ -90,10 +73,8 @@ bool BPLUSTREE_TYPE::GetValue(const KeyType &key,
         result.push_back(value);
         res = true;
     }
-		
-		lockStack.top()->bp_mtx.unlock_shared();
+
     this->buffer_pool_manager_->UnpinPage(page_ptr->GetPageId(), false);
-		lockStack.pop();
     return res;
 }
 
@@ -163,20 +144,12 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
 {
     KeyType tmp_key;
     ValueType tmp_value;
-		std::stack<BPlusTreePage *> lockStack;
-    //B_PLUS_TREE_LEAF_PAGE_TYPE *leaf_pg = this->FindLeafPage(key, false);
-    B_PLUS_TREE_LEAF_PAGE_TYPE *leaf_pg = this->FindLeafPageForModify
-																									(key, INSERT, lockStack);
+    B_PLUS_TREE_LEAF_PAGE_TYPE *leaf_pg = this->FindLeafPage(key, false);
 
     /* Key already exists. Trying to insert duplicate key*/
     if(leaf_pg->Lookup(key, tmp_value, this->comparator_))
     {
-				while(!lockStack.empty()) {
-					lockStack.top()->bp_mtx.unlock();
-        	this->buffer_pool_manager_->UnpinPage
-																			(lockStack.top()->GetPageId(),false);
-				}
-        //this->buffer_pool_manager_->UnpinPage(leaf_pg->GetPageId(),false);
+        this->buffer_pool_manager_->UnpinPage(leaf_pg->GetPageId(),false);
         return false;
     }
 
@@ -201,12 +174,7 @@ bool BPLUSTREE_TYPE::InsertIntoLeaf(const KeyType &key, const ValueType &value,
         this->buffer_pool_manager_->UnpinPage(sib_leaf_pg->GetPageId(), true);
     }
 
-		while(!lockStack.empty()) {
-			lockStack.top()->bp_mtx.unlock();
-      this->buffer_pool_manager_->UnpinPage
-																(lockStack.top()->GetPageId(),false);
-		}
-    //this->buffer_pool_manager_->UnpinPage(leaf_pg->GetPageId(), true);
+    this->buffer_pool_manager_->UnpinPage(leaf_pg->GetPageId(), true);
     return true; 
 }
 
@@ -266,7 +234,6 @@ B_PLUS_TREE_INTERNAL_PG_PGID* BPLUSTREE_TYPE::GetNewRoot()
 													(B_PLUS_TREE_INTERNAL_PG_PGID *)bpm->NewPage(root_pgid);
 		assert(root_pgid != INVALID_PAGE_ID);
     new_root_pg->Init(root_pgid, NO_PARENT);
-		new_root_pg->bp_mtx.lock();
     this->root_page_id_ = root_pgid;
     this->UpdateRootPageId(false);
 
@@ -314,7 +281,6 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node,
 
 			parent_pg->PopulateNewRoot(old_node->GetPageId(), key, 
 																											new_node->GetPageId());
-			parent_pg->bp_mtx.unlock();
       this->buffer_pool_manager_->UnpinPage(this->root_page_id_, true);
 			return;	
     }
@@ -365,7 +331,6 @@ void BPLUSTREE_TYPE::InsertIntoParent(BPlusTreePage *old_node,
             new_root_pg->PopulateNewRoot(parent_pg->GetPageId(), 
                                          tmp_key, sib_pg->GetPageId());
 
-						new_root_pg->bp_mtx.unlock();
             this->buffer_pool_manager_->UnpinPage(this->root_page_id_, true);
         }
         else 
@@ -762,59 +727,6 @@ B_PLUS_TREE_LEAF_PAGE_TYPE *BPLUSTREE_TYPE::FindLeafPage(const KeyType &key,
     return ((B_PLUS_TREE_LEAF_PAGE_TYPE *)page_ptr);
 }
 
-
-/* Implements Index concurrency */
-INDEX_TEMPLATE_ARGUMENTS
-B_PLUS_TREE_LEAF_PAGE_TYPE *BPLUSTREE_TYPE::FindLeafPageForModify
-															(const KeyType &key, uint8_t operation,
-															std::stack<BPlusTreePage *> &lockStack) 
-{   
-    BPlusTreePage *page_ptr = 
-        (BPlusTreePage*)this->buffer_pool_manager_->FetchPage
-                                                      (this->root_page_id_);
-    page_id_t pg_id;
-		//std::stack<BPlusTreePage *> lockStack;
-
-		page_ptr->bp_mtx.lock();
-		lockStack.push(page_ptr);
-
-    while(!page_ptr->IsLeafPage())
-    {
-        B_PLUS_TREE_INTERNAL_PG_PGID *int_pg_ptr = 
-                      (B_PLUS_TREE_INTERNAL_PG_PGID *)page_ptr;
-
-        pg_id = int_pg_ptr->Lookup(key, this->comparator_);
-
-        //this->buffer_pool_manager_->UnpinPage(page_ptr->GetPageId(), false);
-
-        page_ptr = 
-            (BPlusTreePage *)this->buffer_pool_manager_->FetchPage(pg_id);
-				
-				page_ptr->bp_mtx.lock();
-
-
-				if((operation == INSERT && 
-						int_pg_ptr->GetSize() < int_pg_ptr->GetMaxSize()) ||
-					  (operation == DELETE &&
-						int_pg_ptr->GetSize() > int_pg_ptr->GetMinSize())) {
-					
-					/*  Release all the previously held lock, as this current
-					 *  node is safe and can absorb the inserts or deletes
-					 *  that might happen in the subtree rooted by it
-					 */					
-					while(!lockStack.empty()) {
-						lockStack.top()->bp_mtx.unlock();
-        		this->buffer_pool_manager_->UnpinPage
-															(lockStack.top()->GetPageId(), false);
-						lockStack.pop();
-					}	
-				}
-
-				lockStack.push(page_ptr);
-    }
-    
-    return ((B_PLUS_TREE_LEAF_PAGE_TYPE *)page_ptr);
-}
 /*
  * Update/Insert root page id in header page(where page_id = 0, header_page is
  * defined under include/page/header_page.h)

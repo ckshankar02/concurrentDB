@@ -50,7 +50,6 @@ int BPlusTreePage::GetSize() const
  */
 void BPlusTreePage::SetLSN(lsn_t lsn) { lsn_ = lsn; }
 
-
 void BPlusTreePage::SetSize(int size) 
 {
   this->size_ = size;
